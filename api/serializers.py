@@ -102,6 +102,7 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
 
     def create(self, validated_data):
       
@@ -109,7 +110,8 @@ class RegisterSerializer(serializers.Serializer):
             username=validated_data['username'],
             password=validated_data['password'],
             first_name=validated_data['first_name'],
-            last_name=validated_data['last_name']
+            last_name=validated_data['last_name'],
+            email=validated_data['email']
         )
         
         

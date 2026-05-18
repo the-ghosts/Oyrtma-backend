@@ -1,7 +1,7 @@
 from django import views
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import OffenceViewSet, OffenderViewSet, BookingViewSet, RegisterView, CitizenRegisterView, AddVehicleView, VehiclesView
+from .views import OffenceViewSet, OffenderViewSet, BookingViewSet, RegisterView, CitizenRegisterView, AddVehicleView, VehiclesView, AdminDashboardStatsView, AdminOfficerManagementView
 from .views import paystack_webhook
 from .views import get_paystack_config
 from .views import verify_payment_by_reference
@@ -25,4 +25,9 @@ urlpatterns = [
     path('payments/webhook/paystack/', paystack_webhook, name='paystack-webhook'),
     path('payments/config/', get_paystack_config, name='paystack-config'),
     path('payments/verify/', verify_payment_by_reference, name='paystack-verify-by-ref'),
+    path('admin/stats/', AdminDashboardStatsView.as_view(), name='admin-stats'),
+    path('admin/officers/', AdminOfficerManagementView.as_view(), name='admin-officers-list'),
+    path('admin/officers/<int:pk>/', AdminOfficerManagementView.as_view(), name='admin-officers-detail'),
 ]
+
+

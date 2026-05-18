@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 User = get_user_model()
+from django.db.models import Sum, Q
 import random
 import string
 from rest_framework import generics, permissions
@@ -7,6 +8,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework import viewsets
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.views import APIView
 from .models import Offence, Offender, Booking, User, Vehicle
 from .serializers import OffenceSerializer, OffenderSerializer, BookingSerializer, RegisterSerializer, CitizenRegisterSerializer, CustomTokenObtainPairSerializer, VehicleSerializer, PaymentSerializer
 from rest_framework.decorators import action
@@ -36,9 +38,24 @@ def generate_reference_id():
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
+class IsAdminOrReadOnly(permissions.BasePermission):
+    """
+    Custom permission: Anyone can view the list of offences,
+    but only Superusers (Admins) can add, edit, or delete them.
+    """
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS: # GET requests
+            return True
+        return request.user and request.user.is_superuser # POST, PUT, PATCH, DELETE
+
 class OffenceViewSet(viewsets.ModelViewSet):
-    queryset = Offence.objects.all() # Where to get the data from the database
-    serializer_class = OffenceSerializer # Which translator to use
+    
+    from .models import Offence
+    from .serializers import OffenceSerializer
+    
+    queryset = Offence.objects.all().order_by('name')
+    serializer_class = OffenceSerializer
+    permission_classes = [IsAdminOrReadOnly]
 
 class OffenderViewSet(viewsets.ModelViewSet):
     queryset = Offender.objects.all()
@@ -352,3 +369,88 @@ class VehiclesView(generics.ListAPIView):
     def get_queryset(self):
         # Look up the logged-in user and only return THEIR cars
         return Vehicle.objects.filter(owner__driver_license_number=self.request.user.username)
+
+
+class AdminDashboardStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Enforce strict RBAC: Only superusers/admins can access this
+        if not request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only administrators can view state statistics.")
+
+        # Calculate revenue metrics
+        total_revenue = Booking.objects.filter(payment_status='Paid').aggregate(Sum('amount_due'))['amount_due__sum'] or 0
+        pending_revenue = Booking.objects.filter(payment_status='Pending').aggregate(Sum('amount_due'))['amount_due__sum'] or 0
+        
+        # Calculate operational metrics
+        total_tickets = Booking.objects.count()
+        # Assuming officers are marked as 'is_staff' in your User model
+        active_officers = User.objects.filter(is_staff=True, is_superuser=False).count()
+
+        return Response({
+            'total_revenue': total_revenue,
+            'pending_revenue': pending_revenue,
+            'total_tickets': total_tickets,
+            'active_officers': active_officers
+        })
+
+class AdminOfficerManagementView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    # --- 1. FETCH OFFICERS (Your perfectly updated code) ---
+    def get(self, request, pk=None):
+        if not request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only admins can view officers.")
+        
+        User = get_user_model()
+        from .models import Offender 
+        
+        citizen_usernames = Offender.objects.exclude(
+            driver_license_number__isnull=True
+        ).exclude(
+            driver_license_number__exact=''
+        ).values_list('driver_license_number', flat=True)
+        
+        users = User.objects.filter(
+            Q(is_staff=True) | ~Q(username__in=citizen_usernames),
+            is_superuser=False
+        ).order_by('-date_joined').values(
+            'id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_active', 'date_joined'
+        )
+        
+        return Response(list(users))
+
+    # --- 2. APPROVE OFFICER & UNLOCK ACCOUNT ---
+    def patch(self, request, pk=None):
+        if not request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only admins can approve officers.")
+        
+        User = get_user_model()
+        try:
+            user = User.objects.get(pk=pk)
+            
+            # Grant the system badge
+            user.is_staff = True  
+            # Mark as official officer role
+            user.is_officer = True 
+            # Unlock the account (overriding the is_active=False from the serializer)
+            user.is_active = True 
+            
+            user.save()
+            return Response({"message": "Officer approved and account unlocked successfully!"})
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=404)
+
+    # --- 3. REJECT / DELETE OFFICER ---
+    def delete(self, request, pk=None):
+        if not request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only admins can remove officers.")
+        
+        User = get_user_model()
+        try:
+            user = User.objects.get(pk=pk)
+            user.delete() 
+            return Response({"message": "User removed successfully!"})
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=404)
