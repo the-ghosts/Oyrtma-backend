@@ -1,6 +1,12 @@
 from django.contrib.auth import get_user_model
 User = get_user_model()
-from django.db.models import Sum, Q
+from django.db.models import Sum, Q, Count
+from django.utils import timezone
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.utils.encoding import force_bytes, force_str
+from django.core.mail import send_mail
+from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
 import random
 import string
 from rest_framework import generics, permissions
@@ -20,7 +26,7 @@ import os
 import requests
 import hmac
 import hashlib
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db import transaction
 
 def generate_reference_id():
@@ -206,6 +212,36 @@ class BookingViewSet(viewsets.ModelViewSet):
             print(f"✅ [verify_payment] Payment record {'created' if created else 'updated'}: {payment.id}")
             print(f"✅ [verify_payment] Booking {booking.id} marked as Paid")
         return Response({'detail': 'Payment verified and booking marked as Paid.'})
+    
+    @action(detail=True, methods=['post'], url_path='initialize-payment')
+    def initialize_payment(self, request, pk=None):
+        booking = self.get_object()
+        
+        # Talk to Paystack securely from the server
+        url = "https://api.paystack.co/transaction/initialize"
+        headers = {
+            "Authorization": f"Bearer {settings.PAYSTACK_SECRET_KEY}", # Uses your secret key!
+            "Content-Type": "application/json"
+        }
+        
+        # Create a unique reference and set the return URL
+        reference = f"OYRTMA-{booking.id}-{int(timezone.now().timestamp())}"
+        
+        data = {
+            "email": request.user.email or "driver@oyrtma.gov.ng",
+            "amount": int(float(booking.amount_due) * 100),
+            "reference": reference,
+            # This is where Paystack sends them AFTER they pay:
+            "callback_url": "http://localhost:5173/payment-callback" 
+        }
+        
+        response = requests.post(url, headers=headers, json=data)
+        
+        if response.status_code == 200:
+            # Send the secure checkout URL back to React
+            return Response(response.json())
+        else:
+            return Response({"error": "Paystack server error"}, status=400)
 
 
 # Paystack webhook receiver
@@ -438,6 +474,27 @@ class AdminOfficerManagementView(APIView):
             user.is_active = True 
             
             user.save()
+
+            if user.email:
+                subject = "Your OYRTMA Officer Badge is Approved!"
+                message = (
+                    f"Hello {user.first_name},\n\n"
+                    f"Your official OYRTMA Field Officer account has been fully approved and unlocked by Headquarters.\n\n"
+                    f"You can now log into the Command Center and the Field Ticket App using your Staff ID: {user.username}\n\n"
+                    f"Stay safe on the roads!\n"
+                    f"- OYRTMA System Administrator"
+                )
+                
+                try:
+                    send_mail(
+                        subject,
+                        message,
+                        settings.EMAIL_HOST_USER, # Sender
+                        [user.email],             # Recipient
+                        fail_silently=True        # Prevents server crash if email config is wrong
+                    )
+                except Exception as e:
+                    print(f"Email failed to send: {e}")
             return Response({"message": "Officer approved and account unlocked successfully!"})
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=404)
@@ -454,3 +511,155 @@ class AdminOfficerManagementView(APIView):
             return Response({"message": "User removed successfully!"})
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=404)
+
+class AdminDashboardStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only admins can view stats.")
+
+        User = get_user_model()
+        
+        # --- RESTORED: Month calculations needed for Revenue Growth ---
+        now = timezone.now()
+        first_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if first_this_month.month == 1:
+            first_last_month = first_this_month.replace(year=first_this_month.year - 1, month=12)
+        else:
+            first_last_month = first_this_month.replace(month=first_this_month.month - 1)
+        
+        # Look for custom dates in the URL
+        start_date_str = request.query_params.get('start_date')
+        end_date_str = request.query_params.get('end_date')
+
+        # Base Querysets
+        booking_query = Booking.objects.all()
+
+        if start_date_str and end_date_str:
+            # If dates provided, filter the main queries!
+            booking_query = booking_query.filter(date_time__range=[start_date_str, end_date_str + " 23:59:59"])
+
+        # 1. Base Stats 
+        total_revenue = booking_query.filter(payment_status='Paid').aggregate(Sum('amount_due'))['amount_due__sum'] or 0
+        pending_revenue = booking_query.filter(payment_status='Pending').aggregate(Sum('amount_due'))['amount_due__sum'] or 0
+        total_tickets = booking_query.count()
+        active_officers = User.objects.filter(is_staff=True, is_superuser=False).count()
+
+        # 2. Analytics: Revenue Growth
+        this_month_rev = booking_query.filter(payment_status='Paid', date_time__gte=first_this_month).aggregate(Sum('amount_due'))['amount_due__sum'] or 0
+        last_month_rev = booking_query.filter(payment_status='Paid', date_time__gte=first_last_month, date_time__lt=first_this_month).aggregate(Sum('amount_due'))['amount_due__sum'] or 0
+
+        revenue_growth = 0
+        if last_month_rev > 0:
+            revenue_growth = ((this_month_rev - last_month_rev) / last_month_rev) * 100
+        elif this_month_rev > 0:
+            revenue_growth = 100 
+
+        # 3. Analytics: Top Crime Hotspots (Locations) - CHANGED TO booking_query
+        top_locations = list(booking_query.values('location').annotate(count=Count('id')).order_by('-count')[:5])
+
+        # 4. Analytics: Top Performing Officers (Catch Rate) - CHANGED TO booking_query
+        top_officers = list(booking_query.exclude(officer__isnull=True).values(
+            'officer__first_name', 'officer__last_name', 'officer__username'
+        ).annotate(count=Count('id')).order_by('-count')[:5])
+
+        # 5. Analytics: Most Frequent Offences - CHANGED TO booking_query
+        top_offences = list(booking_query.values('offence__name').annotate(count=Count('id')).order_by('-count')[:5])
+
+        return Response({
+            "total_revenue": total_revenue,
+            "pending_revenue": pending_revenue,
+            "total_tickets": total_tickets,
+            "active_officers": active_officers,
+            "this_month_revenue": this_month_rev,
+            "last_month_revenue": last_month_rev,
+            "revenue_growth": round(revenue_growth, 1),
+            "top_locations": top_locations,
+            "top_officers": top_officers,
+            "top_offences": top_offences
+        })
+
+# --- PASSWORD RESET REQUEST ---
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+    def post(self, request):
+        email = request.data.get('email')
+        User = get_user_model()
+        try:
+            user = User.objects.get(email=email)
+            # Generate a secure one-time token and encode the user's ID
+            token = default_token_generator.make_token(user)
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            
+            
+            reset_link = f"http://localhost:5173/reset-password/{uid}/{token}"
+            
+            # Send the email
+            send_mail(
+                "Password Reset Request - OYRTMA",
+                f"Hello {user.first_name},\n\nYou requested to reset your password.\nClick the secure link below to create a new password:\n\n{reset_link}\n\nIf you did not request this, please ignore this email.",
+                settings.EMAIL_HOST_USER,
+                [user.email],
+                fail_silently=False
+            )
+            return Response({"message": "A password reset link has been sent to your email."})
+        except User.DoesNotExist:
+            return Response({"error": "No user found with this email address."}, status=404)
+
+# --- PASSWORD RESET CONFIRMATION ---
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+    def post(self, request, uidb64, token):
+        new_password = request.data.get('new_password')
+        User = get_user_model()
+        try:
+            # Decode the user's ID
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+            
+           
+            if default_token_generator.check_token(user, token):
+                user.set_password(new_password)
+                user.save()
+                return Response({"message": "Password successfully reset! You can now log in."})
+            else:
+                return Response({"error": "This reset link is invalid or has expired."}, status=400)
+        except Exception:
+            return Response({"error": "Invalid reset link."}, status=400)
+
+class CitizenPasswordResetVerifyView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        license_number = request.data.get('driver_license')
+        phone_number = request.data.get('phone_number')
+
+        if not license_number or not phone_number:
+            return Response({"error": "Both License Number and Phone Number are required."}, status=400)
+
+        User = get_user_model()
+        from .models import Offender 
+
+        try:
+            # Citizens log in with their license as their username
+            user = User.objects.get(username=license_number)
+            offender = Offender.objects.get(driver_license_number=license_number)
+
+            # Security Check: Does the phone number match?
+            if offender.phone_number == phone_number:
+                # Match found! Generate the secure tokens
+                token = default_token_generator.make_token(user)
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                
+                # Send the keys back to React to unlock the reset screen
+                return Response({
+                    "message": "Identity verified!",
+                    "uidb64": uid,
+                    "token": token
+                })
+            else:
+                return Response({"error": "The Phone Number does not match our records for this License."}, status=400)
+                
+        except (User.DoesNotExist, Offender.DoesNotExist):
+            return Response({"error": "No driver account found with this License Number."}, status=404)

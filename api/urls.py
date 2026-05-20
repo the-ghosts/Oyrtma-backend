@@ -1,7 +1,7 @@
 from django import views
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import OffenceViewSet, OffenderViewSet, BookingViewSet, RegisterView, CitizenRegisterView, AddVehicleView, VehiclesView, AdminDashboardStatsView, AdminOfficerManagementView
+from .views import OffenceViewSet, OffenderViewSet, BookingViewSet, RegisterView, CitizenRegisterView, AddVehicleView, VehiclesView, AdminDashboardStatsView, AdminOfficerManagementView, PasswordResetRequestView, PasswordResetConfirmView, CitizenPasswordResetVerifyView
 from .views import paystack_webhook
 from .views import get_paystack_config
 from .views import verify_payment_by_reference
@@ -28,6 +28,9 @@ urlpatterns = [
     path('admin/stats/', AdminDashboardStatsView.as_view(), name='admin-stats'),
     path('admin/officers/', AdminOfficerManagementView.as_view(), name='admin-officers-list'),
     path('admin/officers/<int:pk>/', AdminOfficerManagementView.as_view(), name='admin-officers-detail'),
+    path('password-reset/', PasswordResetRequestView.as_view(), name='password_reset'),
+    path('password-reset-confirm/<uidb64>/<token>/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
+    path('citizen-password-reset/', CitizenPasswordResetVerifyView.as_view(), name='citizen_password_reset'),
 ]
 
 

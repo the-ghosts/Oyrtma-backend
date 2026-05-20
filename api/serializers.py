@@ -60,6 +60,9 @@ class OffenderSerializer(serializers.ModelSerializer):
 class BookingSerializer(serializers.ModelSerializer):
     officer_name = serializers.SerializerMethodField()
     officer = serializers.SerializerMethodField()
+
+    offence_name = serializers.CharField(source='offence.name', read_only=True)
+    offence_description = serializers.CharField(source='offence.description', read_only=True)
     class Meta:
         model = Booking
         fields = '__all__'
