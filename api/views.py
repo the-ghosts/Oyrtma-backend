@@ -15,8 +15,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework import viewsets
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.views import APIView
-from .models import Offence, Offender, Booking, User, Vehicle
-from .serializers import OffenceSerializer, OffenderSerializer, BookingSerializer, RegisterSerializer, CitizenRegisterSerializer, CustomTokenObtainPairSerializer, VehicleSerializer, PaymentSerializer
+from .models import Offence, Offender, Booking, User, Vehicle, DriverInformation, SMSLog
+from .serializers import OffenceSerializer, OffenderSerializer, BookingSerializer, RegisterSerializer, CitizenRegisterSerializer, CustomTokenObtainPairSerializer, VehicleSerializer, PaymentSerializer, DriverInformationSerializer, SMSLogSerializer
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
@@ -28,6 +28,11 @@ import hmac
 import hashlib
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db import transaction
+from rest_framework.filters import SearchFilter  # Phase 3: SMS API
+import csv  # Phase 3: Bulk import
+from io import StringIO  # Phase 3: Bulk import
+from django.core.exceptions import ValidationError as DjangoValidationError  # Phase 3: Validation
+from .tasks import retry_failed_sms
 
 def generate_reference_id():
     # string.ascii_uppercase gives us 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -663,3 +668,248 @@ class CitizenPasswordResetVerifyView(APIView):
                 
         except (User.DoesNotExist, Offender.DoesNotExist):
             return Response({"error": "No driver account found with this License Number."}, status=404)
+
+
+# ========== SMS NOTIFICATION API ENDPOINTS (Phase 3) ==========
+
+from rest_framework.filters import SearchFilter
+from .models import DriverInformation, SMSLog
+from .serializers import DriverInformationSerializer, SMSLogSerializer
+import csv
+from io import StringIO
+from django.core.exceptions import ValidationError as DjangoValidationError
+
+
+class IsOfficer(permissions.BasePermission):
+    """
+    Permission: Only officers and admins can access driver endpoints
+    """
+    def has_permission(self, request, view):
+        return request.user and request.user.is_authenticated and (
+            request.user.is_staff or hasattr(request.user, 'officer')
+        )
+
+
+class IsAdmin(permissions.BasePermission):
+    """
+    Permission: Only admins/superusers can access
+    """
+    def has_permission(self, request, view):
+        return request.user and request.user.is_staff
+
+
+class DriverInformationViewSet(viewsets.ModelViewSet):
+    """
+    API endpoints for driver information management
+    
+    GET    /api/drivers/                 - List all drivers
+    POST   /api/drivers/                 - Create driver
+    GET    /api/drivers/{id}/            - Get driver details
+    PUT    /api/drivers/{id}/            - Update driver
+    DELETE /api/drivers/{id}/            - Delete driver
+    POST   /api/drivers/bulk-import/     - Bulk import from CSV
+    GET    /api/drivers/search/?plate=   - Search by plate number
+    """
+    
+    queryset = DriverInformation.objects.all()
+    serializer_class = DriverInformationSerializer
+    permission_classes = [IsAuthenticated, IsOfficer]
+    filter_backends = [SearchFilter]
+    search_fields = ['plate_number', 'phone_number', 'driver_name', 'state']
+    
+    @action(detail=False, methods=['post'], url_path='bulk-import')
+    def bulk_import(self, request):
+        """
+        Bulk import drivers from CSV file
+        
+        Expected CSV format:
+        plate_number,phone_number,driver_name,state,license_number,email,vehicle_type
+        
+        Request: POST /api/drivers/bulk-import/ with file in 'file' field
+        """
+        try:
+            file = request.FILES.get('file')
+            if not file:
+                return Response(
+                    {'error': 'No file provided'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Read CSV file
+            decoded_file = file.read().decode('utf-8')
+            csv_data = csv.DictReader(StringIO(decoded_file))
+            
+            created_count = 0
+            error_count = 0
+            errors = []
+            
+            for row_num, row in enumerate(csv_data, start=2):  # Start from 2 (header is 1)
+                try:
+                    # Validate required fields
+                    required_fields = ['plate_number', 'phone_number']
+                    for field in required_fields:
+                        if not row.get(field):
+                            raise DjangoValidationError(f"Missing required field: {field}")
+                    
+                    # Format phone number
+                    phone = row['phone_number'].strip()
+                    if not phone.startswith('+234') and not phone.startswith('0'):
+                        phone = '+234' + phone
+                    elif phone.startswith('0'):
+                        phone = '+234' + phone[1:]
+                    elif not phone.startswith('+'):
+                        phone = '+' + phone
+                    
+                    # Create or update driver
+                    driver, created = DriverInformation.objects.update_or_create(
+                        plate_number=row['plate_number'].strip(),
+                        defaults={
+                            'phone_number': phone,
+                            'driver_name': row.get('driver_name', 'Unknown').strip(),
+                            'state': row.get('state', 'Unknown').strip(),
+                            'license_number': row.get('license_number', '').strip(),
+                            'email': row.get('email', '').strip(),
+                            'vehicle_type': row.get('vehicle_type', 'Unknown').strip(),
+                            'is_active': True,
+                        }
+                    )
+                    created_count += 1
+                
+                except Exception as e:
+                    error_count += 1
+                    errors.append({
+                        'row': row_num,
+                        'error': str(e),
+                        'data': row
+                    })
+            
+            return Response({
+                'message': f'Bulk import completed',
+                'created_or_updated': created_count,
+                'errors': error_count,
+                'error_details': errors[:10]  # Return first 10 errors
+            }, status=status.HTTP_201_CREATED)
+        
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to process file: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
+    @action(detail=False, methods=['get'])
+    def search(self, request):
+        """
+        Search drivers by plate number
+        
+        Usage: GET /api/drivers/search/?plate=ABC-123-XYZ
+        """
+        plate = request.query_params.get('plate')
+        if not plate:
+            return Response(
+                {'error': 'plate parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            driver = DriverInformation.objects.get(plate_number=plate)
+            serializer = self.get_serializer(driver)
+            return Response(serializer.data)
+        except DriverInformation.DoesNotExist:
+            return Response(
+                {'error': f'Driver with plate {plate} not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class SMSLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only API endpoints for SMS log management
+    
+    GET    /api/sms-logs/                         - List all SMS logs
+    GET    /api/sms-logs/{id}/                    - Get SMS log details
+    GET    /api/sms-logs/by-booking/{booking_id}/ - Get SMS logs for booking
+    POST   /api/sms-logs/{id}/retry/              - Retry failed SMS
+    """
+    
+    queryset = SMSLog.objects.all().order_by('-created_at')
+    serializer_class = SMSLogSerializer
+    permission_classes = [IsAuthenticated, IsAdmin]
+    filter_backends = [SearchFilter]
+    search_fields = ['phone_number', 'booking__reference_id', 'status']
+    
+    @action(detail=True, methods=['post'])
+    def retry(self, request, pk=None):
+        """
+        Manually retry sending a failed SMS
+        
+        Usage: POST /api/sms-logs/{id}/retry/
+        """
+        try:
+            sms_log = self.get_object()
+            
+            if sms_log.status == 'sent':
+                return Response(
+                    {'error': 'Cannot retry an SMS that was already sent'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Queue retry task
+            retry_failed_sms.delay(sms_log.id)
+            
+            return Response({
+                'message': 'SMS retry task queued',
+                'sms_log_id': sms_log.id,
+                'task_status': 'queued'
+            })
+        
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to queue retry task: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'])
+    def by_booking(self, request):
+        """
+        Get all SMS logs for a specific booking
+        
+        Usage: GET /api/sms-logs/by-booking/?booking_id=123
+        """
+        booking_id = request.query_params.get('booking_id')
+        if not booking_id:
+            return Response(
+                {'error': 'booking_id parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        sms_logs = self.queryset.filter(booking_id=booking_id)
+        if not sms_logs.exists():
+            return Response(
+                {'error': f'No SMS logs found for booking {booking_id}'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = self.get_serializer(sms_logs, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """
+        Get SMS statistics
+        
+        Usage: GET /api/sms-logs/stats/
+        """
+        from django.db.models import Count
+        
+        total = SMSLog.objects.count()
+        sent = SMSLog.objects.filter(status='sent').count()
+        failed = SMSLog.objects.filter(status='failed').count()
+        pending = SMSLog.objects.filter(status='pending').count()
+        
+        return Response({
+            'total': total,
+            'sent': sent,
+            'failed': failed,
+            'pending': pending,
+            'success_rate': f"{(sent/total*100):.1f}%" if total > 0 else "0%"
+        })

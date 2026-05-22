@@ -1,7 +1,12 @@
 from django import views
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import OffenceViewSet, OffenderViewSet, BookingViewSet, RegisterView, CitizenRegisterView, AddVehicleView, VehiclesView, AdminDashboardStatsView, AdminOfficerManagementView, PasswordResetRequestView, PasswordResetConfirmView, CitizenPasswordResetVerifyView
+from .views import (
+    OffenceViewSet, OffenderViewSet, BookingViewSet, RegisterView, CitizenRegisterView, 
+    AddVehicleView, VehiclesView, AdminDashboardStatsView, AdminOfficerManagementView, 
+    PasswordResetRequestView, PasswordResetConfirmView, CitizenPasswordResetVerifyView,
+    DriverInformationViewSet, SMSLogViewSet  # Phase 3: SMS API endpoints
+)
 from .views import paystack_webhook
 from .views import get_paystack_config
 from .views import verify_payment_by_reference
@@ -13,6 +18,8 @@ router = DefaultRouter()
 router.register(r'offences', OffenceViewSet)
 router.register(r'offenders', OffenderViewSet)
 router.register(r'bookings', BookingViewSet, basename='booking')
+router.register(r'drivers', DriverInformationViewSet, basename='driver')  # Phase 3: Driver management
+router.register(r'sms-logs', SMSLogViewSet, basename='sms-log')  # Phase 3: SMS log tracking
 
 
 # 3. Expose the URLs to Django

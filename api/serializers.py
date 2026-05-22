@@ -1,7 +1,7 @@
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
-from .models import User, Offence, Offender, Booking, Vehicle, Payment
+from .models import User, Offence, Offender, Booking, Vehicle, Payment, DriverInformation, SMSLog
 from django.db import IntegrityError
 from django.contrib.auth import get_user_model
 User = get_user_model()
@@ -60,6 +60,7 @@ class OffenderSerializer(serializers.ModelSerializer):
 class BookingSerializer(serializers.ModelSerializer):
     officer_name = serializers.SerializerMethodField()
     officer = serializers.SerializerMethodField()
+    plate_number = serializers.ReadOnlyField()
 
     offence_name = serializers.CharField(source='offence.name', read_only=True)
     offence_description = serializers.CharField(source='offence.description', read_only=True)
@@ -185,3 +186,60 @@ class VehicleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vehicle
         fields = ['id', 'plate_number', 'vehicle_model']
+
+
+class DriverInformationSerializer(serializers.ModelSerializer):
+    """
+    Serializer for DriverInformation model.
+    Used for SMS notification lookup and management.
+    """
+    class Meta:
+        model = DriverInformation
+        fields = [
+            'id', 'plate_number', 'phone_number', 'driver_name', 
+            'state', 'license_number', 'email', 'vehicle_type', 
+            'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+    
+    def validate_phone_number(self, value):
+        """Validate phone number format"""
+        if not value.startswith('+234') and not value.startswith('0'):
+            raise serializers.ValidationError(
+                "Phone number must start with +234 or 0"
+            )
+        return value
+    
+    def validate_plate_number(self, value):
+        """Validate plate number format"""
+        if len(value) < 5:
+            raise serializers.ValidationError(
+                "Plate number must be at least 5 characters"
+            )
+        return value.upper()
+
+
+class SMSLogSerializer(serializers.ModelSerializer):
+    """
+    Serializer for SMSLog model.
+    Used for monitoring and auditing SMS notifications.
+    """
+    booking_reference = serializers.CharField(source='booking.reference_id', read_only=True)
+    driver_name = serializers.CharField(source='driver_info.driver_name', read_only=True)
+    
+    class Meta:
+        model = SMSLog
+        fields = [
+            'id', 'booking', 'booking_reference', 'driver_info', 'driver_name',
+            'phone_number', 'message', 'status', 'termii_response', 
+            'error_message', 'sent_at', 'created_at'
+        ]
+        read_only_fields = ['created_at', 'sent_at', 'termii_response', 'error_message']
+    
+    def to_representation(self, instance):
+        """Mask phone number in response"""
+        representation = super().to_representation(instance)
+        if representation.get('phone_number'):
+            phone = representation['phone_number']
+            representation['phone_number'] = f"{phone[:8]}****{phone[-3:]}"
+        return representation
