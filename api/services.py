@@ -97,30 +97,41 @@ class TermiiSMSService:
                 timeout=self.timeout
             )
             
-            response.raise_for_status()
-            response_data = response.json()
+            try:
+                response_data = response.json()
+            except ValueError:
+                response_data = {}
             
-            # Log the response
-            if response_data.get('code') == 'success':
-                logger.info(f"✅ SMS sent successfully to {formatted_phone}")
-                logger.debug(f"   Response: {response_data}")
-                return {
-                    'status': 'success',
-                    'message_id': response_data.get('message_id'),
-                    'phone_number': formatted_phone,
-                    'timestamp': timezone.now(),
-                    'raw_response': response_data,
-                }
-            else:
-                logger.warning(f"⚠️ Termii API returned non-success code: {response_data.get('code')}")
-                logger.debug(f"   Response: {response_data}")
-                return {
-                    'status': 'failed',
-                    'error': response_data.get('message', 'Unknown error'),
-                    'phone_number': formatted_phone,
-                    'timestamp': timezone.now(),
-                    'raw_response': response_data,
-                }
+            # Check for success
+            if response.status_code == 200:
+                code = response_data.get('code')
+                if code in ['ok', 'success', '200'] or 'message_id' in response_data:
+                    logger.info(f"✅ SMS sent successfully to {formatted_phone}")
+                    logger.debug(f"   Response: {response_data}")
+                    return {
+                        'status': 'success',
+                        'message_id': response_data.get('message_id'),
+                        'phone_number': formatted_phone,
+                        'timestamp': timezone.now(),
+                        'raw_response': response_data,
+                    }
+            
+            # Extract detailed error message if available
+            error_detail = response_data.get('message') or response_data.get('error')
+            if not error_detail and response.status_code != 200:
+                error_detail = f"HTTP {response.status_code} Error"
+            elif not error_detail:
+                error_detail = "Unknown error response from Termii"
+                
+            logger.warning(f"⚠️ Termii API returned failure: {error_detail}")
+            logger.debug(f"   Response: {response_data}")
+            return {
+                'status': 'failed',
+                'error': error_detail,
+                'phone_number': formatted_phone,
+                'timestamp': timezone.now(),
+                'raw_response': response_data,
+            }
         
         except requests.exceptions.Timeout:
             error_msg = "Termii API request timed out"
@@ -128,6 +139,16 @@ class TermiiSMSService:
             raise TermiiSMSException(error_msg)
         
         except requests.exceptions.RequestException as e:
+            # Check if there is a response body to extract error from
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    resp_json = e.response.json()
+                    err = resp_json.get('message') or resp_json.get('error')
+                    if err:
+                        logger.error(f"❌ Termii API error: {err}")
+                        raise TermiiSMSException(err)
+                except Exception:
+                    pass
             error_msg = f"Failed to connect to Termii API: {str(e)}"
             logger.error(f"❌ {error_msg}")
             raise TermiiSMSException(error_msg)
@@ -195,7 +216,7 @@ class TermiiSMSService:
             float: Remaining balance
         """
         try:
-            endpoint = f"{self.base_url}/get/balance"
+            endpoint = f"{self.base_url}/get-balance"
             params = {"api_key": self.api_key}
             
             response = requests.get(endpoint, params=params, timeout=self.timeout)

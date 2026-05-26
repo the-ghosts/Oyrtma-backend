@@ -11,7 +11,7 @@ import os
 import sys
 import django
 from django.test import TestCase, Client
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient, APITestCase
 from rest_framework import status
 
@@ -19,6 +19,7 @@ from rest_framework import status
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'oyrtma_core.settings')
 sys.path.insert(0, os.path.dirname(__file__))
 django.setup()
+User = get_user_model()
 
 from api.models import DriverInformation, SMSLog, Booking
 from api.serializers import DriverInformationSerializer, SMSLogSerializer

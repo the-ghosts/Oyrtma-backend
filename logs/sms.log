@@ -1,0 +1,2 @@
+DEBUG 2026-05-26 17:06:00,521 services 17356 15564    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-05-26 17:06:00,548 tasks 17356 15564    Error: You have insufficient balance
