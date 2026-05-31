@@ -1,7 +1,7 @@
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
-from .models import User, Offence, Offender, Booking, Vehicle, Payment, DriverInformation, SMSLog
+from .models import User, Offence, Offender, Booking, Vehicle, Payment, DriverInformation, SMSLog, TicketDispute
 from django.db import IntegrityError
 from django.contrib.auth import get_user_model
 User = get_user_model()
@@ -61,6 +61,7 @@ class BookingSerializer(serializers.ModelSerializer):
     officer_name = serializers.SerializerMethodField()
     officer = serializers.SerializerMethodField()
     plate_number = serializers.ReadOnlyField()
+    offender_license = serializers.CharField(source='offender.driver_license_number', read_only=True)
 
     offence_name = serializers.CharField(source='offence.name', read_only=True)
     offence_description = serializers.CharField(source='offence.description', read_only=True)
@@ -134,6 +135,7 @@ class CitizenRegisterSerializer(serializers.Serializer):
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
     plate_number = serializers.CharField(max_length=20, write_only=True)
+    phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True, write_only=True)
 
     def create(self, validated_data):
         # 1. Create the Authentication Account
@@ -147,21 +149,71 @@ class CitizenRegisterSerializer(serializers.Serializer):
         user.save()
 
         # 2. Create the Driver Profile (Offender)
-        from .models import Offender, Vehicle
-        offender, created= Offender.objects.get_or_create(
+        from .models import Offender, Vehicle, DriverInformation
+        phone_number = validated_data.get('phone_number', '')
+
+        offender, created = Offender.objects.get_or_create(
             driver_license_number=validated_data['username'],
             defaults={
-                'driver_name': f"{validated_data['first_name']} {validated_data['last_name']}"
+                'driver_name': f"{validated_data['first_name']} {validated_data['last_name']}",
+                'phone_number': phone_number
             }
         )
+        if not created and phone_number:
+            offender.phone_number = phone_number
+            offender.save(update_fields=['phone_number'])
 
-        # 3. Create the Vehicle and link it to the Driver!
-        Vehicle.objects.get_or_create(
-            plate_number=validated_data['plate_number'],
+        plate_number = validated_data['plate_number'].strip().upper()
+
+        # 3. Create or Update Driver Registry (DriverInformation)
+        driver_info, di_created = DriverInformation.objects.get_or_create(
+            plate_number=plate_number,
             defaults={
-                'owner': offender # This links the car to the driver!
+                'phone_number': phone_number,
+                'driver_name': offender.driver_name,
+                'state': 'Oyo',
+                'license_number': offender.driver_license_number,
+                'email': user.email or '',
+                'vehicle_type': 'Unknown',
+                'is_active': True
             }
         )
+        if not di_created:
+            # Sync DriverInformation if it already exists
+            updated = False
+            if not driver_info.is_active:
+                driver_info.is_active = True
+                updated = True
+            if not driver_info.phone_number and phone_number:
+                driver_info.phone_number = phone_number
+                updated = True
+            if not driver_info.driver_name or driver_info.driver_name == 'Unknown':
+                driver_info.driver_name = offender.driver_name
+                updated = True
+            if not driver_info.license_number:
+                driver_info.license_number = offender.driver_license_number
+                updated = True
+            if updated:
+                driver_info.save()
+
+        # Resolve vehicle model from registry if it exists
+        vehicle_model = 'Unknown'
+        if not di_created and driver_info.vehicle_type and driver_info.vehicle_type != 'Unknown':
+            vehicle_model = driver_info.vehicle_type
+
+        # 4. Create or Update the Vehicle and link it to the driver!
+        vehicle, v_created = Vehicle.objects.get_or_create(
+            plate_number=plate_number,
+            defaults={
+                'owner': offender,
+                'vehicle_model': vehicle_model
+            }
+        )
+        if not v_created:
+            vehicle.owner = offender
+            if vehicle_model and vehicle_model != 'Unknown':
+                vehicle.vehicle_model = vehicle_model
+            vehicle.save()
         
         return user
 
@@ -243,3 +295,42 @@ class SMSLogSerializer(serializers.ModelSerializer):
             phone = representation['phone_number']
             representation['phone_number'] = f"{phone[:8]}****{phone[-3:]}"
         return representation
+
+
+class TicketDisputeSerializer(serializers.ModelSerializer):
+    booking_reference = serializers.CharField(source='booking.reference_id', read_only=True)
+    amount_due = serializers.DecimalField(source='booking.amount_due', max_digits=10, decimal_places=2, read_only=True)
+    offence_name = serializers.CharField(source='booking.offence.name', read_only=True)
+    citizen_name = serializers.CharField(source='offender.driver_name', read_only=True)
+    plate_number = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = TicketDispute
+        fields = [
+            'id', 'booking', 'booking_reference', 'amount_due', 'offence_name', 
+            'citizen_name', 'plate_number', 'reason', 'description', 'status', 
+            'submitted_at', 'reviewed_at', 'review_comments'
+        ]
+        read_only_fields = ['status', 'submitted_at', 'reviewed_at', 'review_comments']
+
+    def get_plate_number(self, obj):
+        return obj.booking.plate_number
+
+
+class CitizenProfileSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='driver_license_number', read_only=True)
+    driver_name = serializers.CharField(read_only=True)
+    
+    class Meta:
+        model = Offender
+        fields = ['id', 'username', 'driver_name', 'driver_license_number', 'phone_number', 'email']
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True)
+
+    def validate_new_password(self, value):
+        if len(value) < 6:
+            raise serializers.ValidationError("Password must be at least 6 characters.")
+        return value

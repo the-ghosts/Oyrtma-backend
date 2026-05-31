@@ -159,4 +159,24 @@ class SMSLog(models.Model):
         return f"SMS to {self.phone_number} - {self.status}"
 
 
+class TicketDispute(models.Model):
+    STATUS_CHOICES = [
+        ('Pending', 'Pending Review'),
+        ('Approved', 'Approved (Waived)'),
+        ('Rejected', 'Rejected'),
+    ]
+    
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name='disputes')
+    offender = models.ForeignKey(Offender, on_delete=models.CASCADE, related_name='disputes')
+    reason = models.CharField(max_length=100)
+    description = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Pending')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_comments = models.TextField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Dispute on {self.booking.reference_id} - {self.status}"
+
+
 # Create your models here.

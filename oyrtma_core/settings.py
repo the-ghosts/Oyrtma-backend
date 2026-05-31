@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import timedelta
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -90,7 +91,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'oyrtma_db',         
         'USER': 'postgres',          
-        'PASSWORD': 'Arcadiakid1', 
+        'PASSWORD': 'rauf9525', 
         'HOST': 'localhost',         
         'PORT': '5432',               
     }
@@ -161,6 +162,14 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated', # This locks down the entire API!
     )
 }
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=7),   # Extend access token lifetime to 7 days
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30), # Extend refresh token lifetime to 30 days
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+}
+
 
 
 # CORS Settings: Allow our React frontend to communicate with the API

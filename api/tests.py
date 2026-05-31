@@ -2,7 +2,8 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient, APITestCase
 from rest_framework import status
-from api.models import DriverInformation, SMSLog
+from api.models import DriverInformation, SMSLog, Offender, Vehicle, Offence, Booking, TicketDispute
+
 
 User = get_user_model()
 
@@ -350,3 +351,315 @@ class IntegrationTests(APITestCase):
         search_response = self.client.get('/api/drivers/search/?plate=WORKFLOW-001')
         self.assertEqual(search_response.status_code, status.HTTP_200_OK)
         self.assertEqual(search_response.data['id'], driver_id)
+
+
+class VehicleRegistrationAPITests(APITestCase):
+    """
+    Test suite for the new vehicle and plate number registration/assignment behavior
+    """
+    def setUp(self):
+        self.client = APIClient()
+        self.username = 'NG-009'
+        self.password = 'password123'
+        
+        # Create a citizen user and a corresponding offender profile
+        self.user = User.objects.create_user(
+            username=self.username,
+            email='citizen@test.com',
+            password=self.password,
+            is_citizen=True
+        )
+        self.offender = Offender.objects.create(
+            driver_license_number=self.username,
+            driver_name='John Doe',
+            email='citizen@test.com',
+            phone_number='+2348123456789'
+        )
+
+    def test_add_vehicle_new_plate_creates_registry(self):
+        """
+        Verify that registering a new vehicle with a new plate number
+        automatically creates a DriverInformation record and attaches it to the user.
+        """
+        self.client.force_authenticate(user=self.user)
+        
+        plate = 'OY-999-NEW'
+        model = 'Toyota Corolla'
+        
+        # Verify it doesn't exist in registry or vehicles yet
+        self.assertFalse(DriverInformation.objects.filter(plate_number=plate).exists())
+        self.assertFalse(Vehicle.objects.filter(plate_number=plate).exists())
+        
+        response = self.client.post('/api/vehicles/add/', {
+            'plate_number': plate,
+            'vehicle_model': model
+        })
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['plate_number'], plate)
+        
+        # Verify DriverInformation was created
+        self.assertTrue(DriverInformation.objects.filter(plate_number=plate).exists())
+        driver_info = DriverInformation.objects.get(plate_number=plate)
+        self.assertEqual(driver_info.driver_name, self.offender.driver_name)
+        self.assertEqual(driver_info.phone_number, self.offender.phone_number)
+        
+        # Verify Vehicle was created and owned by our offender
+        self.assertTrue(Vehicle.objects.filter(plate_number=plate).exists())
+        vehicle = Vehicle.objects.get(plate_number=plate)
+        self.assertEqual(vehicle.owner, self.offender)
+        self.assertEqual(vehicle.vehicle_model, model)
+
+    def test_add_vehicle_existing_plate_attaches_to_user(self):
+        """
+        Verify that registering a vehicle with an existing plate in DriverInformation
+        just attaches/updates it to the user's account without failing.
+        """
+        self.client.force_authenticate(user=self.user)
+        
+        plate = 'OY-888-EXI'
+        model = 'Honda Accord'
+        
+        # Populate DriverInformation first (simulating the registry has this plate)
+        DriverInformation.objects.create(
+            plate_number=plate,
+            phone_number='+2349000000000',
+            driver_name='Some Other Driver',
+            state='Oyo',
+            is_active=True
+        )
+        
+        # Verify it's in registry but not in Vehicle table yet
+        self.assertTrue(DriverInformation.objects.filter(plate_number=plate).exists())
+        self.assertFalse(Vehicle.objects.filter(plate_number=plate).exists())
+        
+        response = self.client.post('/api/vehicles/add/', {
+            'plate_number': plate,
+            'vehicle_model': model
+        })
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        # Verify vehicle was created and assigned to John Doe
+        self.assertTrue(Vehicle.objects.filter(plate_number=plate).exists())
+        vehicle = Vehicle.objects.get(plate_number=plate)
+        self.assertEqual(vehicle.owner, self.offender)
+        self.assertEqual(vehicle.vehicle_model, model)
+
+    def test_add_vehicle_inactive_plate_forces_activation(self):
+        """
+        Verify that registering a plate that is currently marked inactive in DriverInformation
+        reactivates it (sets is_active=True).
+        """
+        self.client.force_authenticate(user=self.user)
+        
+        plate = 'OY-777-INA'
+        model = 'Kia Rio'
+        
+        # Populate DriverInformation as inactive first
+        DriverInformation.objects.create(
+            plate_number=plate,
+            phone_number='+2347000000000',
+            driver_name='Inactive Driver',
+            state='Oyo',
+            is_active=False
+        )
+        
+        response = self.client.post('/api/vehicles/add/', {
+            'plate_number': plate,
+            'vehicle_model': model
+        })
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        # Verify DriverInformation was force-activated
+        driver_info = DriverInformation.objects.get(plate_number=plate)
+        self.assertTrue(driver_info.is_active)
+
+    def test_add_vehicle_existing_plate_without_model_auto_populates(self):
+        """
+        Verify that registering a plate that is already in DriverInformation
+        without supplying a vehicle_model automatically retrieves and sets
+        the model/vehicle_type from the registry.
+        """
+        self.client.force_authenticate(user=self.user)
+        
+        plate = 'OY-555-REG'
+        registry_model = 'Toyota Camry'
+        
+        # Populate DriverInformation first with a specific vehicle_type/model
+        DriverInformation.objects.create(
+            plate_number=plate,
+            phone_number='+2345555555',
+            driver_name='Camry Driver',
+            state='Oyo',
+            vehicle_type=registry_model,
+            is_active=True
+        )
+        
+        response = self.client.post('/api/vehicles/add/', {
+            'plate_number': plate
+            # No vehicle_model supplied
+        })
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        # Verify the Vehicle was created and its model was auto-filled from registry
+        self.assertTrue(Vehicle.objects.filter(plate_number=plate).exists())
+        vehicle = Vehicle.objects.get(plate_number=plate)
+        self.assertEqual(vehicle.vehicle_model, registry_model)
+
+
+from .models import TicketDispute
+
+class CitizenPortalFeaturesTests(APITestCase):
+    """
+    Test suite for Disputes, Appeals, and Citizen Settings
+    """
+    def setUp(self):
+        self.client = APIClient()
+        self.username = 'NG-999'
+        self.password = 'oldpass123'
+        
+        # Create Citizen user & offender
+        self.user = User.objects.create_user(
+            username=self.username,
+            email='citizen9@test.com',
+            password=self.password,
+            is_citizen=True
+        )
+        self.offender = Offender.objects.create(
+            driver_license_number=self.username,
+            driver_name='Adam Cole',
+            email='citizen9@test.com',
+            phone_number='+2348123456780'
+        )
+
+        # Create Admin user
+        self.admin_user = User.objects.create_superuser(
+            username='superadmin',
+            email='admin@test.com',
+            password='adminpassword'
+        )
+
+        # Create Offence & Booking
+        self.offence = Offence.objects.create(
+            name='No Seatbelt',
+            code='NSB',
+            description='Driving without a fastened seatbelt',
+            fine_amount=10000.00
+        )
+        self.booking = Booking.objects.create(
+            offence=self.offence,
+            offender=self.offender,
+            officer=self.admin_user,
+            reference_id='OYR-TEST1234',
+            amount_due=10000.00,
+            payment_status='Pending',
+            location='Bodija, Ibadan'
+        )
+
+    def test_citizen_submit_dispute_appeal(self):
+        """Verify citizen can file a dispute appeal successfully"""
+        self.client.force_authenticate(user=self.user)
+        
+        response = self.client.post('/api/disputes/', {
+            'booking': self.booking.id,
+            'reason': 'Medical/Emergency',
+            'description': 'Emergency situation heading to hospital.'
+        })
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(TicketDispute.objects.filter(booking=self.booking).exists())
+        dispute = TicketDispute.objects.get(booking=self.booking)
+        self.assertEqual(dispute.status, 'Pending')
+        self.assertEqual(dispute.offender, self.offender)
+
+    def test_citizen_cannot_dispute_others_booking(self):
+        """Verify citizen cannot submit dispute on other people's tickets"""
+        other_user = User.objects.create_user(
+            username='NG-888',
+            email='other@test.com',
+            password='password123',
+            is_citizen=True
+        )
+        self.client.force_authenticate(user=other_user)
+        
+        response = self.client.post('/api/disputes/', {
+            'booking': self.booking.id,
+            'reason': 'Other',
+            'description': 'Fake description.'
+        })
+        
+        # Should raise permission exception / 403
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_review_dispute_approves_and_waives_fine(self):
+        """Verify that admin approving dispute marks it approved and waives the ticket"""
+        # File dispute
+        dispute = TicketDispute.objects.create(
+            booking=self.booking,
+            offender=self.offender,
+            reason='Wrong Offence',
+            description='I was wrongly ticketed.',
+            status='Pending'
+        )
+
+        self.client.force_authenticate(user=self.admin_user)
+        response = self.client.post(f'/api/admin/disputes/{dispute.id}/review/', {
+            'status': 'Approved',
+            'review_comments': 'Valid appeal. Mismatch checked.'
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        # Verify dispute updated
+        dispute.refresh_from_db()
+        self.assertEqual(dispute.status, 'Approved')
+        self.assertEqual(dispute.review_comments, 'Valid appeal. Mismatch checked.')
+        
+        # Verify Booking fine is waived (payment_status is Cancelled)
+        self.booking.refresh_from_db()
+        self.assertEqual(self.booking.payment_status, 'Cancelled')
+
+    def test_citizen_profile_retrieve_and_update(self):
+        """Verify retrieve citizen profile and updating contact info works and syncs to user model"""
+        self.client.force_authenticate(user=self.user)
+        
+        # 1. Retrieve profile
+        response = self.client.get('/api/citizen/profile/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['driver_name'], 'Adam Cole')
+        
+        # 2. Update contacts
+        update_response = self.client.put('/api/citizen/profile/', {
+            'phone_number': '+2348099887766',
+            'email': 'adamnew@test.com'
+        })
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        
+        # Verify Offender model updated
+        self.offender.refresh_from_db()
+        self.assertEqual(self.offender.phone_number, '+2348099887766')
+        self.assertEqual(self.offender.email, 'adamnew@test.com')
+
+        # Verify synced to User authentication model
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, 'adamnew@test.com')
+        self.assertEqual(self.user.phone_number, '+2348099887766')
+
+    def test_citizen_change_password(self):
+        """Verify citizen can change account password securely"""
+        self.client.force_authenticate(user=self.user)
+        
+        response = self.client.post('/api/citizen/change-password/', {
+            'old_password': self.password,
+            'new_password': 'newpassword777'
+        })
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        # Verify password changed by logging in again
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('newpassword777'))
+

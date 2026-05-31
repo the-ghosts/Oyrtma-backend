@@ -17,7 +17,7 @@ six==1.17.0
 sqlparse==0.5.5
 tzdata==2025.3
 urllib3==2.7.0
-python-termii==0.1.9
+#python-termii==0.1.9
 celery==5.3.4
 redis==5.0.1
 faker==22.0.0

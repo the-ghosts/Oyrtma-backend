@@ -396,12 +396,89 @@ class AddVehicleView(generics.CreateAPIView):
     serializer_class = VehicleSerializer
     permission_classes = [permissions.IsAuthenticated] 
 
-    def perform_create(self, serializer):
-        #Look up the Driver Profile (Offender) using the logged-in user's username
-        current_driver = Offender.objects.get(driver_license_number=self.request.user.username)
-        
-        # Save the new vehicle and automatically set the owner to this driver
-        serializer.save(owner=current_driver)
+    def create(self, request, *args, **kwargs):
+        plate_number = request.data.get('plate_number')
+        vehicle_model = request.data.get('vehicle_model', '')
+
+        if not plate_number:
+            return Response(
+                {"plate_number": ["This field is required."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        plate_number = plate_number.strip().upper()
+
+        # If vehicle_model was not supplied or empty, attempt to resolve it from the driver registry (DriverInformation)
+        if not vehicle_model:
+            try:
+                registry_entry = DriverInformation.objects.get(plate_number=plate_number)
+                if registry_entry.vehicle_type and registry_entry.vehicle_type != 'Unknown':
+                    vehicle_model = registry_entry.vehicle_type
+            except DriverInformation.DoesNotExist:
+                pass
+
+        try:
+            current_driver = Offender.objects.get(driver_license_number=request.user.username)
+        except Offender.DoesNotExist:
+            return Response(
+                {"detail": "Driver profile (Offender) not found for this user account."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 1. Handle Driver Registry (DriverInformation)
+        driver_info, di_created = DriverInformation.objects.get_or_create(
+            plate_number=plate_number,
+            defaults={
+                'phone_number': current_driver.phone_number or '',
+                'driver_name': current_driver.driver_name or 'Unknown',
+                'state': 'Oyo',  # OYRTMA operates in Oyo State
+                'license_number': current_driver.driver_license_number or '',
+                'email': current_driver.email or '',
+                'vehicle_type': vehicle_model or 'Unknown',
+                'is_active': True
+            }
+        )
+        if not di_created:
+            # Sync existing driver information if missing details
+            updated = False
+            if not driver_info.is_active:
+                driver_info.is_active = True
+                updated = True
+            if not driver_info.phone_number and current_driver.phone_number:
+                driver_info.phone_number = current_driver.phone_number
+                updated = True
+            if not driver_info.driver_name or driver_info.driver_name == 'Unknown':
+                if current_driver.driver_name:
+                    driver_info.driver_name = current_driver.driver_name
+                    updated = True
+            if not driver_info.license_number and current_driver.driver_license_number:
+                driver_info.license_number = current_driver.driver_license_number
+                updated = True
+            if not driver_info.email and current_driver.email:
+                driver_info.email = current_driver.email
+                updated = True
+            if (not driver_info.vehicle_type or driver_info.vehicle_type == 'Unknown') and vehicle_model:
+                driver_info.vehicle_type = vehicle_model
+                updated = True
+            if updated:
+                driver_info.save()
+
+        # 2. Handle Vehicle Record (assign/attach it to current driver)
+        vehicle, v_created = Vehicle.objects.get_or_create(
+            plate_number=plate_number,
+            defaults={
+                'owner': current_driver,
+                'vehicle_model': vehicle_model
+            }
+        )
+        if not v_created:
+            vehicle.owner = current_driver
+            if vehicle_model:
+                vehicle.vehicle_model = vehicle_model
+            vehicle.save()
+
+        serializer = self.get_serializer(vehicle)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 class VehiclesView(generics.ListAPIView):
     serializer_class = VehicleSerializer
@@ -913,3 +990,119 @@ class SMSLogViewSet(viewsets.ReadOnlyModelViewSet):
             'pending': pending,
             'success_rate': f"{(sent/total*100):.1f}%" if total > 0 else "0%"
         })
+
+
+from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied
+from .models import TicketDispute
+from .serializers import TicketDisputeSerializer, CitizenProfileSerializer, ChangePasswordSerializer
+
+class TicketDisputeViewSet(viewsets.ModelViewSet):
+    serializer_class = TicketDisputeSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return TicketDispute.objects.filter(offender__driver_license_number=self.request.user.username).order_by('-submitted_at')
+
+    def perform_create(self, serializer):
+        booking = serializer.validated_data.get('booking')
+        try:
+            offender = Offender.objects.get(driver_license_number=self.request.user.username)
+        except Offender.DoesNotExist:
+            raise PermissionDenied("Citizen profile not found.")
+            
+        if booking.offender != offender:
+            raise PermissionDenied("You can only dispute your own tickets.")
+            
+        if booking.payment_status == 'Paid':
+            raise PermissionDenied("This citation has already been Paid and cleared.")
+            
+        serializer.save(offender=offender, status='Pending')
+
+
+class AdminTicketDisputeViewSet(viewsets.ModelViewSet):
+    serializer_class = TicketDisputeSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = TicketDispute.objects.all().order_by('-submitted_at')
+
+    def get_queryset(self):
+        if not self.request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only administrators can view all citizen disputes.")
+        return super().get_queryset()
+
+    @action(detail=True, methods=['post'])
+    def review(self, request, pk=None):
+        if not request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only administrators can review citizen disputes.")
+            
+        dispute = self.get_object()
+        review_status = request.data.get('status')
+        review_comments = request.data.get('review_comments', '')
+
+        if review_status not in ['Approved', 'Rejected']:
+            return Response({'error': 'Invalid status. Choose Approved or Rejected.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        dispute.status = review_status
+        dispute.review_comments = review_comments
+        dispute.reviewed_at = timezone.now()
+        dispute.save()
+
+        # If Approved, cancel the fine booking
+        if review_status == 'Approved':
+            booking = dispute.booking
+            booking.payment_status = 'Cancelled'
+            booking.save()
+
+        return Response(TicketDisputeSerializer(dispute).data)
+
+
+class CitizenProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class = CitizenProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        try:
+            return Offender.objects.get(driver_license_number=self.request.user.username)
+        except Offender.DoesNotExist:
+            raise PermissionDenied("Citizen profile not found.")
+
+    def perform_update(self, serializer):
+        # Save profile
+        offender = serializer.save()
+        
+        # Sync email to the authentication user
+        user = self.request.user
+        email = serializer.validated_data.get('email')
+        if email:
+            user.email = email
+            user.save(update_fields=['email'])
+
+        # Sync phone number to the authentication user as well
+        phone_number = serializer.validated_data.get('phone_number')
+        if phone_number is not None:
+            user.phone_number = phone_number
+            user.save(update_fields=['phone_number'])
+
+        # Sync registry record
+        from .models import DriverInformation
+        DriverInformation.objects.filter(license_number=offender.driver_license_number).update(
+            phone_number=offender.phone_number or '',
+            email=offender.email or ''
+        )
+
+
+class CitizenChangePasswordView(generics.GenericAPIView):
+    serializer_class = ChangePasswordSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        user = request.user
+        if not user.check_password(serializer.validated_data['old_password']):
+            return Response({'old_password': ['Incorrect password.']}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(serializer.validated_data['new_password'])
+        user.save()
+        return Response({'message': 'Password successfully updated.'}, status=status.HTTP_200_OK)

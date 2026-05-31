@@ -5,7 +5,8 @@ from .views import (
     OffenceViewSet, OffenderViewSet, BookingViewSet, RegisterView, CitizenRegisterView, 
     AddVehicleView, VehiclesView, AdminDashboardStatsView, AdminOfficerManagementView, 
     PasswordResetRequestView, PasswordResetConfirmView, CitizenPasswordResetVerifyView,
-    DriverInformationViewSet, SMSLogViewSet  # Phase 3: SMS API endpoints
+    DriverInformationViewSet, SMSLogViewSet,  # Phase 3: SMS API endpoints
+    TicketDisputeViewSet, AdminTicketDisputeViewSet, CitizenProfileView, CitizenChangePasswordView
 )
 from .views import paystack_webhook
 from .views import get_paystack_config
@@ -20,6 +21,8 @@ router.register(r'offenders', OffenderViewSet)
 router.register(r'bookings', BookingViewSet, basename='booking')
 router.register(r'drivers', DriverInformationViewSet, basename='driver')  # Phase 3: Driver management
 router.register(r'sms-logs', SMSLogViewSet, basename='sms-log')  # Phase 3: SMS log tracking
+router.register(r'disputes', TicketDisputeViewSet, basename='dispute')
+router.register(r'admin/disputes', AdminTicketDisputeViewSet, basename='admin-dispute')
 
 
 # 3. Expose the URLs to Django
@@ -38,6 +41,8 @@ urlpatterns = [
     path('password-reset/', PasswordResetRequestView.as_view(), name='password_reset'),
     path('password-reset-confirm/<uidb64>/<token>/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
     path('citizen-password-reset/', CitizenPasswordResetVerifyView.as_view(), name='citizen_password_reset'),
+    path('citizen/profile/', CitizenProfileView.as_view(), name='citizen-profile'),
+    path('citizen/change-password/', CitizenChangePasswordView.as_view(), name='citizen-change-password'),
 ]
 
 

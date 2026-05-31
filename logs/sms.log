@@ -1,2 +1,31 @@
 DEBUG 2026-05-26 17:06:00,521 services 17356 15564    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
 WARNING 2026-05-26 17:06:00,548 tasks 17356 15564    Error: You have insufficient balance
+DEBUG 2026-05-31 20:47:43,223 services 15836 19556    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-05-31 20:47:43,267 tasks 15836 19556    Error: You have insufficient balance
+DEBUG 2026-05-31 20:48:46,544 services 15836 18120    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-05-31 20:48:46,578 tasks 15836 18120    Error: You have insufficient balance
+DEBUG 2026-05-31 20:50:48,372 services 15836 18120    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-05-31 20:50:48,384 tasks 15836 18120    Error: You have insufficient balance
+DEBUG 2026-05-31 20:52:41,340 services 15836 19556    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+DEBUG 2026-05-31 20:54:50,246 services 15836 18120    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-05-31 20:54:50,261 tasks 15836 18120    Error: You have insufficient balance
+DEBUG 2026-05-31 21:04:21,402 signals 15324 25168 Booking 3 updated (not new), skipping SMS
+DEBUG 2026-05-31 21:04:23,529 signals 15324 2740 Booking 3 updated (not new), skipping SMS
+DEBUG 2026-05-31 21:04:25,269 services 15836 19556    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+DEBUG 2026-05-31 21:04:26,919 services 15836 19556    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-05-31 21:16:51,512 signals 26136 24088 Booking 1 has no plate number, cannot send SMS
+DEBUG 2026-05-31 21:16:51,542 signals 26136 24088 Booking 1 updated (not new), skipping SMS
+DEBUG 2026-05-31 21:16:51,542 signals 26136 24088 Booking 1 payment_status is Cancelled, not 'Paid'
+WARNING 2026-05-31 21:16:54,741 signals 26136 24088 Booking 2 has no plate number, cannot send SMS
+WARNING 2026-05-31 21:16:59,455 signals 26136 24088 Booking 3 has no plate number, cannot send SMS
+WARNING 2026-05-31 21:17:07,399 signals 26136 24088 Booking 4 has no plate number, cannot send SMS
+WARNING 2026-05-31 21:17:10,838 signals 26136 24088 Booking 5 has no plate number, cannot send SMS
+DEBUG 2026-05-31 21:17:11,244 signals 3616 9532 Booking 2 updated (not new), skipping SMS
+DEBUG 2026-05-31 21:17:11,244 signals 3616 9532 Booking 2 payment_status is Cancelled, not 'Paid'
+WARNING 2026-05-31 21:19:31,179 signals 22916 10380 Booking 1 has no plate number, cannot send SMS
+DEBUG 2026-05-31 21:19:31,197 signals 22916 10380 Booking 1 updated (not new), skipping SMS
+DEBUG 2026-05-31 21:19:31,197 signals 22916 10380 Booking 1 payment_status is Cancelled, not 'Paid'
+WARNING 2026-05-31 21:19:32,991 signals 22916 10380 Booking 2 has no plate number, cannot send SMS
+WARNING 2026-05-31 21:19:35,707 signals 22916 10380 Booking 3 has no plate number, cannot send SMS
+WARNING 2026-05-31 21:19:40,334 signals 22916 10380 Booking 4 has no plate number, cannot send SMS
+WARNING 2026-05-31 21:19:42,206 signals 22916 10380 Booking 5 has no plate number, cannot send SMS
