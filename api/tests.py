@@ -652,6 +652,7 @@ class CitizenPortalFeaturesTests(APITestCase):
         """Verify citizen can change account password securely"""
         self.client.force_authenticate(user=self.user)
         
+        # Verify password changed by logging in again
         response = self.client.post('/api/citizen/change-password/', {
             'old_password': self.password,
             'new_password': 'newpassword777'
@@ -662,4 +663,99 @@ class CitizenPortalFeaturesTests(APITestCase):
         # Verify password changed by logging in again
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password('newpassword777'))
+
+
+class OfficerOnboardingTests(APITestCase):
+    """
+    Test suite for disabled self-registration and Admin officer onboarding features.
+    """
+    def setUp(self):
+        self.client = APIClient()
+        self.admin_user = User.objects.create_superuser(
+            username='admin_boss',
+            email='admin_boss@test.com',
+            password='adminpassword123'
+        )
+        self.regular_officer = User.objects.create_user(
+            username='officer_reg',
+            email='officer_reg@test.com',
+            password='password123',
+            is_staff=True,
+            is_officer=True
+        )
+
+    def test_self_signup_disabled(self):
+        """Verify self-registration (RegisterView) returns 403 Forbidden"""
+        response = self.client.post('/api/register/', {
+            'username': 'new_officer',
+            'email': 'new_officer@test.com',
+            'password': 'password123',
+            'first_name': 'Marshal John',
+            'last_name': 'Smith'
+        })
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('Self-registration is disabled', str(response.data))
+
+    def test_admin_register_officer_success(self):
+        """Verify admin can onboard officer and receives credentials/password"""
+        self.client.force_authenticate(user=self.admin_user)
+        
+        response = self.client.post('/api/admin/officers/', {
+            'username': 'OYR-099',
+            'email': 'officer_new@test.com',
+            'first_name': 'Marshal Adam',
+            'last_name': 'Savage',
+            'password': '' # Auto-generate
+        })
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn('generated_password', response.data)
+        generated_password = response.data['generated_password']
+        self.assertTrue(len(generated_password) >= 8)
+        
+        # Verify user exists in database and is unlocked
+        new_officer = User.objects.get(username='OYR-099')
+        self.assertEqual(new_officer.email, 'officer_new@test.com')
+        self.assertTrue(new_officer.is_staff)
+        self.assertTrue(new_officer.is_officer)
+        self.assertTrue(new_officer.is_active)
+        self.assertTrue(new_officer.check_password(generated_password))
+
+    def test_admin_register_officer_duplicate_username(self):
+        """Verify registration fails with duplicate staff ID"""
+        self.client.force_authenticate(user=self.admin_user)
+        
+        response = self.client.post('/api/admin/officers/', {
+            'username': 'officer_reg', # Already exists in setUp
+            'email': 'different_email@test.com',
+            'first_name': 'Marshal Bob',
+            'last_name': 'Dylan'
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already registered', response.data['error'])
+
+    def test_admin_register_officer_duplicate_email(self):
+        """Verify registration fails with duplicate email"""
+        self.client.force_authenticate(user=self.admin_user)
+        
+        response = self.client.post('/api/admin/officers/', {
+            'username': 'OYR-887',
+            'email': 'officer_reg@test.com', # Already exists in setUp
+            'first_name': 'Marshal Bob',
+            'last_name': 'Dylan'
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already registered', response.data['error'])
+
+    def test_non_admin_cannot_register_officer(self):
+        """Verify non-superusers cannot onboard officers"""
+        self.client.force_authenticate(user=self.regular_officer)
+        
+        response = self.client.post('/api/admin/officers/', {
+            'username': 'OYR-776',
+            'email': 'unauthorised@test.com',
+            'first_name': 'Marshal Bob',
+            'last_name': 'Dylan'
+        })
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 

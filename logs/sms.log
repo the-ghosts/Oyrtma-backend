@@ -29,3 +29,18 @@ WARNING 2026-05-31 21:19:32,991 signals 22916 10380 Booking 2 has no plate numbe
 WARNING 2026-05-31 21:19:35,707 signals 22916 10380 Booking 3 has no plate number, cannot send SMS
 WARNING 2026-05-31 21:19:40,334 signals 22916 10380 Booking 4 has no plate number, cannot send SMS
 WARNING 2026-05-31 21:19:42,206 signals 22916 10380 Booking 5 has no plate number, cannot send SMS
+DEBUG 2026-06-01 11:40:50,873 services 12200 4784    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-06-01 11:40:51,009 tasks 12200 4784    Error: You have insufficient balance
+DEBUG 2026-06-01 11:40:53,703 services 12200 4784    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-06-01 11:40:53,759 tasks 12200 4784    Error: You have insufficient balance
+DEBUG 2026-06-01 11:40:55,610 services 12200 4784    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-06-01 11:40:55,645 tasks 12200 4784    Error: You have insufficient balance
+DEBUG 2026-06-01 11:42:58,233 services 12200 3900    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-06-01 11:42:58,262 tasks 12200 3900    Error: You have insufficient balance
+DEBUG 2026-06-01 11:43:00,251 services 12200 3900    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-06-01 11:43:00,279 tasks 12200 3900    Error: You have insufficient balance
+DEBUG 2026-06-01 11:43:45,591 services 12200 4784    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+DEBUG 2026-06-01 11:47:02,249 services 12200 3900    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-06-01 11:47:02,286 tasks 12200 3900    Error: You have insufficient balance
+DEBUG 2026-06-01 11:47:04,324 services 12200 3900    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
+WARNING 2026-06-01 11:47:04,353 tasks 12200 3900    Error: You have insufficient balance

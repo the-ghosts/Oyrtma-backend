@@ -386,6 +386,9 @@ class RegisterView(generics.CreateAPIView):
     permission_classes = (AllowAny,) 
     serializer_class = RegisterSerializer
 
+    def post(self, request, *args, **kwargs):
+        raise PermissionDenied("Self-registration is disabled. Please contact the administrator.")
+
 
 
 class CitizenRegisterView(generics.CreateAPIView):
@@ -593,6 +596,94 @@ class AdminOfficerManagementView(APIView):
             return Response({"message": "User removed successfully!"})
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=404)
+
+    # --- 4. ADMIN REGISTERS NEW OFFICER ---
+    def post(self, request):
+        if not request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only admins can register new officers.")
+        
+        username = request.data.get('username')
+        email = request.data.get('email')
+        first_name = request.data.get('first_name')
+        last_name = request.data.get('last_name')
+        password = request.data.get('password')
+        
+        if not username or not email or not first_name or not last_name:
+            return Response({"error": "Staff ID, Email, First Name, and Last Name are required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        User = get_user_model()
+        if User.objects.filter(username=username).exists():
+            return Response({"error": "This Staff ID Number is already registered in the system."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if User.objects.filter(email=email).exists():
+            return Response({"error": "This Email Address is already registered."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Auto-generate password if not provided
+        if not password:
+            import secrets
+            # Generate a clean 8-character password
+            alphabet = string.ascii_letters + string.digits
+            password = ''.join(secrets.choice(alphabet) for _ in range(8))
+            
+        try:
+            # Create user
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name
+            )
+            user.is_staff = True
+            user.is_officer = True
+            user.is_active = True
+            user.save()
+            
+            # Send Email
+            subject = "Your OYRTMA Officer Credentials"
+            message = (
+                f"Hello {first_name} {last_name},\n\n"
+                f"An official OYRTMA Field Officer account has been created for you by the System Administrator.\n\n"
+                f"Your account details are:\n"
+                f"Staff ID / Username: {username}\n"
+                f"Password: {password}\n\n"
+                f"You can log into the Command Center and the Field Ticket App using the following link:\n"
+                f"http://localhost:5174/ \n\n"
+                f"Please make sure to log in and keep your credentials secure.\n\n"
+                f"Stay safe on the roads!\n"
+                f"- OYRTMA System Administrator"
+            )
+            
+            try:
+                send_mail(
+                    subject,
+                    message,
+                    settings.EMAIL_HOST_USER,
+                    [email],
+                    fail_silently=False
+                )
+                email_sent = True
+            except Exception as e:
+                print(f"Error sending email: {e}")
+                email_sent = False
+                
+            return Response({
+                "message": "Officer registered successfully!",
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "is_staff": user.is_staff,
+                    "is_active": user.is_active,
+                },
+                "email_sent": email_sent,
+                "generated_password": password
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response({"error": f"Failed to register officer: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class AdminDashboardStatsView(APIView):
     permission_classes = [IsAuthenticated]

@@ -91,7 +91,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'oyrtma_db',         
         'USER': 'postgres',          
-        'PASSWORD': 'rauf9525', 
+        'PASSWORD': 'Arcadiakid1', 
         'HOST': 'localhost',         
         'PORT': '5432',               
     }
@@ -175,6 +175,11 @@ SIMPLE_JWT = {
 # CORS Settings: Allow our React frontend to communicate with the API
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:5175",
 ]
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
