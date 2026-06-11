@@ -1197,3 +1197,257 @@ class CitizenChangePasswordView(generics.GenericAPIView):
         user.set_password(serializer.validated_data['new_password'])
         user.save()
         return Response({'message': 'Password successfully updated.'}, status=status.HTTP_200_OK)
+
+
+class AdminOfficerBulkImportView(APIView):
+    permission_classes = [IsAuthenticated]
+    from rest_framework.parsers import MultiPartParser, FormParser
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        import csv
+        import openpyxl
+        import secrets
+        import string
+        from io import StringIO, BytesIO
+        from django.contrib.auth import get_user_model
+        from django.core.mail import send_mail
+        from django.conf import settings
+        from django.core.exceptions import PermissionDenied
+        from django.db import transaction
+
+        # Enforce strict RBAC: Only superusers/admins can access this
+        if not request.user.is_superuser:
+            raise PermissionDenied("Security Alert: Only administrators can bulk import officers.")
+
+        file = request.data.get('file')
+        if not file:
+            return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Handle file names (in tests/scripts, file might be passed as a string or a file object)
+        if isinstance(file, str):
+            file_name = 'officers.csv'
+            file_content = file
+        else:
+            file_name = file.name.lower()
+            file_content = file.read()
+
+        rows = []
+
+        try:
+            if file_name.endswith('.csv'):
+                if isinstance(file_content, bytes):
+                    decoded_file = file_content.decode('utf-8')
+                else:
+                    decoded_file = file_content
+                csv_data = csv.DictReader(StringIO(decoded_file))
+                for row in csv_data:
+                    def get_val_csv(keys, default=''):
+                        for k in keys:
+                            for row_k, row_v in row.items():
+                                if row_k and row_k.strip().lower() == k.lower():
+                                    return str(row_v).strip() if row_v is not None else default
+                        return default
+                    
+                    staff_id = get_val_csv(['Staff ID', 'username', 'Staff ID (Optional)', 'Staff ID / Username', 'badge_number'])
+                    first_name = get_val_csv(['First Name', 'Name', 'Full Name', 'Firstname'])
+                    last_name = get_val_csv(['Last Name', 'Lastname'])
+                    rank = get_val_csv(['Rank'], 'Officer')
+                    email = get_val_csv(['Email', 'Email Address', 'email'])
+                    
+                    rows.append({
+                        'staff_id': staff_id,
+                        'first_name': first_name,
+                        'last_name': last_name,
+                        'rank': rank,
+                        'email': email
+                    })
+            elif file_name.endswith('.xlsx'):
+                if isinstance(file_content, str):
+                    file_bytes = file_content.encode('utf-8')
+                else:
+                    file_bytes = file_content
+                wb = openpyxl.load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
+                sheet = wb.active
+                
+                # Extract headers
+                headers = []
+                for cell in next(sheet.iter_rows(max_row=1)):
+                    headers.append(str(cell.value).strip() if cell.value is not None else '')
+
+                # Read data rows
+                for row in sheet.iter_rows(min_row=2, values_only=True):
+                    # Skip completely empty rows
+                    if not any(row):
+                        continue
+                    
+                    row_data = {}
+                    for idx, header in enumerate(headers):
+                        if idx < len(row):
+                            row_data[header] = row[idx]
+                    
+                    def get_val_case_insensitive(keys, default=''):
+                        for k in keys:
+                            for row_k, row_v in row_data.items():
+                                if row_k.strip().lower() == k.lower():
+                                    return str(row_v).strip() if row_v is not None else default
+                        return default
+
+                    staff_id = get_val_case_insensitive(['Staff ID', 'username', 'Staff ID (Optional)', 'Staff ID / Username', 'badge_number'])
+                    first_name = get_val_case_insensitive(['First Name', 'Name', 'Full Name', 'Firstname'])
+                    last_name = get_val_case_insensitive(['Last Name', 'Lastname'])
+                    rank = get_val_case_insensitive(['Rank'], 'Officer')
+                    email = get_val_case_insensitive(['Email', 'Email Address', 'email'])
+                    
+                    rows.append({
+                        'staff_id': staff_id,
+                        'first_name': first_name,
+                        'last_name': last_name,
+                        'rank': rank,
+                        'email': email
+                    })
+            elif file_name.endswith('.xls'):
+                import xlrd
+                if isinstance(file_content, str):
+                    file_bytes = file_content.encode('utf-8')
+                else:
+                    file_bytes = file_content
+                wb = xlrd.open_workbook(file_contents=file_bytes)
+                sheet = wb.sheet_by_index(0)
+                
+                headers = []
+                for col_idx in range(sheet.ncols):
+                    val = sheet.cell_value(0, col_idx)
+                    headers.append(str(val).strip() if val is not None else '')
+                
+                for row_idx in range(1, sheet.nrows):
+                    row_values = [sheet.cell_value(row_idx, col_idx) for col_idx in range(sheet.ncols)]
+                    if not any(str(r).strip() for r in row_values):
+                        continue
+                    
+                    row_data = {}
+                    for col_idx, header in enumerate(headers):
+                        if col_idx < len(row_values):
+                            row_data[header] = row_values[col_idx]
+                            
+                    def get_val_case_insensitive(keys, default=''):
+                        for k in keys:
+                            for row_k, row_v in row_data.items():
+                                if row_k.strip().lower() == k.lower():
+                                    if isinstance(row_v, float) and row_v.is_integer():
+                                        row_v = int(row_v)
+                                    return str(row_v).strip() if row_v is not None else default
+                        return default
+
+                    staff_id = get_val_case_insensitive(['Staff ID', 'username', 'Staff ID (Optional)', 'Staff ID / Username', 'badge_number'])
+                    first_name = get_val_case_insensitive(['First Name', 'Name', 'Full Name', 'Firstname'])
+                    last_name = get_val_case_insensitive(['Last Name', 'Lastname'])
+                    rank = get_val_case_insensitive(['Rank'], 'Officer')
+                    email = get_val_case_insensitive(['Email', 'Email Address', 'email'])
+                    
+                    rows.append({
+                        'staff_id': staff_id,
+                        'first_name': first_name,
+                        'last_name': last_name,
+                        'rank': rank,
+                        'email': email
+                    })
+            else:
+                return Response({'error': 'Unsupported file format. Please upload an Excel (.xlsx/.xls) or CSV (.csv) file.'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': f'Failed to read file: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        User = get_user_model()
+        created_count = 0
+        errors = []
+
+        for idx, row in enumerate(rows, start=2): # assuming header is row 1
+            staff_id = row['staff_id'].strip()
+            first_name = row['first_name'].strip()
+            last_name = row['last_name'].strip()
+            rank = row['rank'].strip() or 'Officer'
+            email = row['email'].strip()
+
+            # Validation
+            if not first_name:
+                errors.append({'row': idx, 'error': 'First Name / Name is required.'})
+                continue
+            if not email:
+                errors.append({'row': idx, 'error': 'Email is required.'})
+                continue
+
+            # Generate Username (Staff ID) if not provided
+            if not staff_id:
+                is_unique = False
+                while not is_unique:
+                    rand_digits = ''.join(secrets.choice(string.digits) for _ in range(4))
+                    generated_id = f"OYR{rand_digits}"
+                    if not User.objects.filter(username=generated_id).exists():
+                        staff_id = generated_id
+                        is_unique = True
+
+            # Double check username
+            if User.objects.filter(username=staff_id).exists():
+                errors.append({'row': idx, 'error': f"Staff ID '{staff_id}' is already registered."})
+                continue
+
+            # Double check email
+            if User.objects.filter(email=email).exists():
+                errors.append({'row': idx, 'error': f"Email '{email}' is already registered."})
+                continue
+
+            # Generate password
+            alphabet = string.ascii_letters + string.digits
+            password = ''.join(secrets.choice(alphabet) for _ in range(8))
+
+            try:
+                with transaction.atomic():
+                    user = User.objects.create_user(
+                        username=staff_id,
+                        email=email,
+                        password=password,
+                        first_name=f"{rank} {first_name}",
+                        last_name=last_name
+                    )
+                    user.is_staff = True
+                    user.is_officer = True
+                    user.is_active = True
+                    user.save()
+
+                    # Send Email
+                    subject = "Your OYRTMA Officer Credentials"
+                    message = (
+                        f"Hello {rank} {first_name} {last_name},\n\n"
+                        f"An official OYRTMA Field Officer account has been created for you by the System Administrator via bulk import.\n\n"
+                        f"Your account details are:\n"
+                        f"Staff ID / Username: {staff_id}\n"
+                        f"Password: {password}\n\n"
+                        f"You can log into the Command Center and the Field Ticket App using the following link:\n"
+                        f"http://localhost:5174/ \n\n"
+                        f"Please make sure to log in and change your password to keep your credentials secure.\n\n"
+                        f"Stay safe on the roads!\n"
+                        f"- OYRTMA System Administrator"
+                    )
+                    
+                    try:
+                        send_mail(
+                            subject,
+                            message,
+                            settings.EMAIL_HOST_USER,
+                            [email],
+                            fail_silently=False
+                        )
+                    except Exception:
+                        pass
+                
+                created_count += 1
+            except Exception as e:
+                errors.append({'row': idx, 'error': f"Failed to create user: {str(e)}"})
+
+        return Response({
+            'message': f'Bulk import complete. {created_count} officer(s) created successfully.',
+            'created_count': created_count,
+            'error_count': len(errors),
+            'errors': errors
+        }, status=status.HTTP_200_OK if not errors else status.HTTP_207_MULTI_STATUS)
+

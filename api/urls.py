@@ -6,7 +6,8 @@ from .views import (
     AddVehicleView, VehiclesView, AdminDashboardStatsView, AdminOfficerManagementView, 
     PasswordResetRequestView, PasswordResetConfirmView, CitizenPasswordResetVerifyView,
     DriverInformationViewSet, SMSLogViewSet,  # Phase 3: SMS API endpoints
-    TicketDisputeViewSet, AdminTicketDisputeViewSet, CitizenProfileView, CitizenChangePasswordView
+    TicketDisputeViewSet, AdminTicketDisputeViewSet, CitizenProfileView, CitizenChangePasswordView,
+    AdminOfficerBulkImportView
 )
 from .views import paystack_webhook
 from .views import get_paystack_config
@@ -37,7 +38,9 @@ urlpatterns = [
     path('payments/verify/', verify_payment_by_reference, name='paystack-verify-by-ref'),
     path('admin/stats/', AdminDashboardStatsView.as_view(), name='admin-stats'),
     path('admin/officers/', AdminOfficerManagementView.as_view(), name='admin-officers-list'),
+    path('admin/officers/bulk-import/', AdminOfficerBulkImportView.as_view(), name='admin-officers-bulk-import'),
     path('admin/officers/<int:pk>/', AdminOfficerManagementView.as_view(), name='admin-officers-detail'),
+
     path('password-reset/', PasswordResetRequestView.as_view(), name='password_reset'),
     path('password-reset-confirm/<uidb64>/<token>/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
     path('citizen-password-reset/', CitizenPasswordResetVerifyView.as_view(), name='citizen_password_reset'),

@@ -759,3 +759,203 @@ class OfficerOnboardingTests(APITestCase):
         })
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+
+class OfficerBulkImportTests(APITestCase):
+    """
+    Test suite for bulk importing officers from Excel/CSV
+    """
+    def setUp(self):
+        self.client = APIClient()
+        self.admin_user = User.objects.create_superuser(
+            username='admin_bulk',
+            email='admin_bulk@test.com',
+            password='adminpassword123'
+        )
+        self.regular_officer = User.objects.create_user(
+            username='officer_regular',
+            email='officer_regular@test.com',
+            password='password123',
+            is_staff=True,
+            is_officer=True
+        )
+
+    def test_bulk_import_csv_success(self):
+        """Verify bulk import with a valid CSV file"""
+        self.client.force_authenticate(user=self.admin_user)
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        
+        csv_data = (
+            "Staff ID,First Name,Last Name,Rank,Email\n"
+            "OYR123,Charles,Leclerc,Commander,charles@oyrtma.gov.ng\n"
+            ",Lando,Norris,Inspector,lando@oyrtma.gov.ng" # blank Staff ID to test generation
+        )
+        csv_file = SimpleUploadedFile(
+            "officers.csv",
+            csv_data.encode('utf-8'),
+            content_type="text/csv"
+        )
+        
+        response = self.client.post(
+            '/api/admin/officers/bulk-import/',
+            {'file': csv_file},
+            format='multipart'
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['created_count'], 2)
+        self.assertEqual(response.data['error_count'], 0)
+        
+        # Verify first officer (explicit Staff ID)
+        officer1 = User.objects.get(username='OYR123')
+        self.assertEqual(officer1.email, 'charles@oyrtma.gov.ng')
+        self.assertEqual(officer1.first_name, 'Commander Charles')
+        self.assertEqual(officer1.last_name, 'Leclerc')
+        self.assertTrue(officer1.is_staff)
+        self.assertTrue(officer1.is_officer)
+        
+        # Verify second officer (generated Staff ID)
+        officer2 = User.objects.get(email='lando@oyrtma.gov.ng')
+        self.assertTrue(officer2.username.startswith('OYR'))
+        self.assertEqual(officer2.first_name, 'Inspector Lando')
+        self.assertEqual(officer2.last_name, 'Norris')
+
+    def test_bulk_import_excel_success(self):
+        """Verify bulk import with a valid Excel file (.xlsx)"""
+        self.client.force_authenticate(user=self.admin_user)
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        import openpyxl
+        from io import BytesIO
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Staff ID", "First Name", "Last Name", "Rank", "Email"])
+        ws.append(["OYR789", "Max", "Verstappen", "Marshal", "max@oyrtma.gov.ng"])
+        ws.append(["", "Lewis", "Hamilton", "Commander", "lewis@oyrtma.gov.ng"])
+        
+        excel_file = BytesIO()
+        wb.save(excel_file)
+        excel_file.seek(0)
+        
+        excel_uploaded_file = SimpleUploadedFile(
+            "officers.xlsx",
+            excel_file.read(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+        response = self.client.post(
+            '/api/admin/officers/bulk-import/',
+            {'file': excel_uploaded_file},
+            format='multipart'
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['created_count'], 2)
+        
+        officer1 = User.objects.get(username='OYR789')
+        self.assertEqual(officer1.first_name, 'Marshal Max')
+        
+        officer2 = User.objects.get(email='lewis@oyrtma.gov.ng')
+        self.assertEqual(officer2.first_name, 'Commander Lewis')
+
+    def test_bulk_import_xls_success(self):
+        """Verify bulk import with a legacy Excel file (.xls) using xlrd mocking"""
+        self.client.force_authenticate(user=self.admin_user)
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from unittest.mock import patch
+        
+        # We mock xlrd.open_workbook to return a mock sheet
+        class MockSheet:
+            def __init__(self):
+                self.ncols = 5
+                self.nrows = 3
+                self.data = [
+                    ["Staff ID", "First Name", "Last Name", "Rank", "Email"],
+                    ["OYR999", "Chike", "Mike", "Route Commander", "chike@oyrtma.gov.ng"],
+                    ["", "Agboola", "Daniel", "Traffic Officer", "agboola@oyrtma.gov.ng"]
+                ]
+            def cell_value(self, row, col):
+                return self.data[row][col]
+
+        class MockWorkbook:
+            def sheet_by_index(self, index):
+                return MockSheet()
+
+        xls_file = SimpleUploadedFile(
+            "officers.xls",
+            b"dummy_binary_xls_content",
+            content_type="application/vnd.ms-excel"
+        )
+        
+        with patch('xlrd.open_workbook', return_value=MockWorkbook()):
+            response = self.client.post(
+                '/api/admin/officers/bulk-import/',
+                {'file': xls_file},
+                format='multipart'
+            )
+            
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['created_count'], 2)
+        
+        officer1 = User.objects.get(username='OYR999')
+        self.assertEqual(officer1.first_name, 'Route Commander Chike')
+        
+        officer2 = User.objects.get(email='agboola@oyrtma.gov.ng')
+        self.assertEqual(officer2.first_name, 'Traffic Officer Agboola')
+
+    def test_bulk_import_validation_errors(self):
+        """Verify that duplicates and validation errors are handled cleanly (207 Multi-Status)"""
+        self.client.force_authenticate(user=self.admin_user)
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        
+        # Create a pre-existing user to trigger duplicate email error
+        User.objects.create_user(
+            username='OYR007',
+            email='james@bond.com',
+            password='password',
+            first_name='James',
+            last_name='Bond'
+        )
+        
+        csv_data = (
+            "Staff ID,First Name,Last Name,Rank,Email\n"
+            "OYR123,Charles,Leclerc,Commander,charles2@oyrtma.gov.ng\n"
+            "OYR007,Duplicate,ID,Commander,james2@bond.com\n" # Duplicate ID
+            "OYR300,James,Bond,Commander,james@bond.com\n"   # Duplicate Email
+            ",,MissingName,Inspector,missing@test.com"         # Missing first name
+        )
+        
+        csv_file = SimpleUploadedFile(
+            "officers.csv",
+            csv_data.encode('utf-8'),
+            content_type="text/csv"
+        )
+        
+        response = self.client.post(
+            '/api/admin/officers/bulk-import/',
+            {'file': csv_file},
+            format='multipart'
+        )
+        
+        self.assertEqual(response.status_code, status.HTTP_207_MULTI_STATUS)
+        self.assertEqual(response.data['created_count'], 1) # Only first Charles is created
+        self.assertEqual(response.data['error_count'], 3)
+        self.assertTrue(len(response.data['errors']) == 3)
+
+    def test_bulk_import_permissions(self):
+        """Verify only admins/superusers can perform bulk import"""
+        self.client.force_authenticate(user=self.regular_officer)
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        
+        dummy_file = SimpleUploadedFile(
+            "officers.csv",
+            b"dummy",
+            content_type="text/csv"
+        )
+        response = self.client.post(
+            '/api/admin/officers/bulk-import/',
+            {'file': dummy_file},
+            format='multipart'
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+

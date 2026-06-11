@@ -21,3 +21,5 @@ urllib3==2.7.0
 celery==5.3.4
 redis==5.0.1
 faker==22.0.0
+openpyxl==3.1.2
+xlrd==2.0.2

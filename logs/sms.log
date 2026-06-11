@@ -44,3 +44,10 @@ DEBUG 2026-06-01 11:47:02,249 services 12200 3900    Response: {'code': 400, 'me
 WARNING 2026-06-01 11:47:02,286 tasks 12200 3900    Error: You have insufficient balance
 DEBUG 2026-06-01 11:47:04,324 services 12200 3900    Response: {'code': 400, 'message': 'You have insufficient balance', 'status': 'error', 'link': 'uri=/sms/send'}
 WARNING 2026-06-01 11:47:04,353 tasks 12200 3900    Error: You have insufficient balance
+WARNING 2026-06-10 23:09:53,592 signals 27520 17128 Booking 1 has no plate number, cannot send SMS
+DEBUG 2026-06-10 23:09:53,628 signals 27520 17128 Booking 1 updated (not new), skipping SMS
+DEBUG 2026-06-10 23:09:53,628 signals 27520 17128 Booking 1 payment_status is Cancelled, not 'Paid'
+WARNING 2026-06-10 23:10:02,409 signals 27520 17128 Booking 2 has no plate number, cannot send SMS
+WARNING 2026-06-10 23:10:14,194 signals 27520 17128 Booking 3 has no plate number, cannot send SMS
+WARNING 2026-06-10 23:10:36,813 signals 27520 17128 Booking 4 has no plate number, cannot send SMS
+WARNING 2026-06-10 23:10:46,309 signals 27520 17128 Booking 5 has no plate number, cannot send SMS
